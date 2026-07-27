@@ -1,0 +1,96 @@
+"use client";
+
+import { ChevronDown } from "lucide-react";
+import * as React from "react";
+import { Collapsible, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { cn } from "@/lib/utils";
+
+/**
+ * Props for the {@link ExpandableText} component.
+ *
+ * @remarks
+ * `children` provides the text content to render, and `className` is optional.
+ */
+interface ExpandableTextProps {
+  /** Text content to render inside the component. */
+  children: string;
+  /** Optional additional CSS classes for styling. */
+  className?: string;
+}
+
+/**
+ * Text component that truncates to 3 lines with a "Show more" toggle.
+ *
+ * @remarks
+ * Only shows the toggle when the text is actually truncated.
+ *
+ * @param props - The {@link ExpandableTextProps} for {@link ExpandableText}.
+ * @param props.children - String text content to be displayed.
+ * @param props.className - Optional CSS class string for styling.
+ * @returns A JSX.Element representing the truncatable text component.
+ */
+export function ExpandableText({ children, className }: ExpandableTextProps) {
+  const [isOpen, setIsOpen] = React.useState(false);
+  const [isTruncated, setIsTruncated] = React.useState(false);
+  const textId = React.useId();
+  const textRef = React.useRef<HTMLParagraphElement>(null);
+
+  const checkTruncation = React.useCallback(() => {
+    const el = textRef.current;
+    if (!el || isOpen) return;
+    const isOverflowing = el.scrollHeight > el.clientHeight + 1;
+    setIsTruncated((current) => (current === isOverflowing ? current : isOverflowing));
+  }, [isOpen]);
+
+  React.useLayoutEffect(() => {
+    if (children.length === 0) {
+      setIsTruncated(false);
+      return;
+    }
+    checkTruncation();
+  }, [checkTruncation, children]);
+
+  React.useLayoutEffect(() => {
+    const el = textRef.current;
+    if (!el) return;
+
+    const observer = new ResizeObserver(() => {
+      checkTruncation();
+    });
+    observer.observe(el);
+
+    return () => observer.disconnect();
+  }, [checkTruncation]);
+
+  return (
+    <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+      <p
+        id={textId}
+        ref={textRef}
+        className={cn("min-w-0 break-words", className, !isOpen && "line-clamp-3")}
+      >
+        {children}
+      </p>
+      {isTruncated && (
+        <CollapsibleTrigger
+          render={
+            <button
+              type="button"
+              aria-controls={textId}
+              className="mt-1 inline-flex h-11 items-center gap-0.5 text-xs font-medium text-primary hover:text-primary/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background md:h-6"
+            >
+              {isOpen ? "Show Less" : "Show More"}
+              <ChevronDown
+                className={cn(
+                  "h-3 w-3 transition-transform motion-reduce:transition-none",
+                  isOpen && "rotate-180",
+                )}
+                aria-hidden="true"
+              />
+            </button>
+          }
+        />
+      )}
+    </Collapsible>
+  );
+}

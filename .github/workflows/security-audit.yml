@@ -1,0 +1,76 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: '0 8 22 * *' # Monthly on the 22nd at 08:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js and pnpm
+        uses: ./.github/actions/setup-node-pnpm
+        with:
+          install: "true"
+
+      - name: Run pnpm audit
+        shell: bash
+        run: |
+          pnpm audit --json > audit-report.json || true
+
+      - name: Install infrastructure dependencies
+        shell: bash
+        run: pnpm -C infrastructure install --frozen-lockfile
+
+      - name: Run infrastructure pnpm audit
+        shell: bash
+        run: |
+          pnpm -C infrastructure audit --json > infrastructure-audit-report.json || true
+
+      - name: Evaluate audit severity
+        run: node .github/scripts/evaluate-audit.mjs
+
+      - name: Evaluate infrastructure audit severity
+        env:
+          AUDIT_REPORT_PATH: infrastructure-audit-report.json
+        run: node .github/scripts/evaluate-audit.mjs
+
+      - name: Check for outdated packages
+        run: |
+          pnpm outdated || true
+          pnpm -C infrastructure outdated || true
+
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: moderate
+          deny-licenses: GPL-3.0, AGPL-3.0
+          comment-summary-in-pr: on-failure

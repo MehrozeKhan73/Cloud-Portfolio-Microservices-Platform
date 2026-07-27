@@ -1,0 +1,44 @@
+import type { Metadata } from "next";
+import { About } from "@/components/sections/about";
+import { FeaturedProjects } from "@/components/sections/featured-projects";
+import { Hero } from "@/components/sections/hero";
+import { sharedOpenGraphImage } from "@/lib/metadata";
+import { PROFILE } from "@/lib/profile";
+
+/** Page metadata definition. */
+export const metadata: Metadata = {
+  title: {
+    absolute: `${PROFILE.name} - ${PROFILE.shortTitle}`,
+  },
+  description: PROFILE.summary,
+  alternates: {
+    canonical: "/",
+  },
+  openGraph: {
+    type: "website",
+    url: "/",
+    title: `${PROFILE.name} - ${PROFILE.shortTitle}`,
+    description: PROFILE.summary,
+    images: [sharedOpenGraphImage],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: `${PROFILE.name} - ${PROFILE.shortTitle}`,
+    description: PROFILE.summary,
+    images: ["/screenshots/hero-preview.png"],
+  },
+};
+
+/**
+ * Renders the home page.
+ * @returns Home page element.
+ */
+export default function Home() {
+  return (
+    <div className="flex min-h-screen flex-col">
+      <Hero />
+      <About />
+      <FeaturedProjects />
+    </div>
+  );
+}

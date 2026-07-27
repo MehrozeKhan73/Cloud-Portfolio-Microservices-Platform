@@ -1,0 +1,195 @@
+import {
+  BookOpenText,
+  ExternalLink,
+  FolderGit2,
+  GitCommitHorizontal,
+  GitFork,
+  GitPullRequest,
+  Star,
+  Tag,
+} from "lucide-react";
+import Link from "next/link";
+import { ExpandableText } from "@/components/shared/expandable-text";
+import { TechBadge } from "@/components/shared/tech-badge";
+import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
+import type { ProjectCardModel } from "@/types/project";
+import { ProjectTagsOverflow } from "./project-tags-overflow";
+
+interface ProjectCardProps {
+  project: ProjectCardModel;
+  className?: string;
+}
+
+/**
+ * Card component showing a project summary.
+ *
+ * @param props Component properties.
+ * @returns Project card element.
+ */
+export function ProjectCard({ project, className }: ProjectCardProps) {
+  const maxVisibleTags = 4;
+  const visibleTags = project.tags.slice(0, maxVisibleTags);
+  const hiddenTags = project.tags.slice(maxVisibleTags);
+
+  return (
+    <Card
+      data-testid="project-card"
+      className={cn(
+        "group relative overflow-hidden",
+        "flex flex-col",
+        "transition-colors motion-reduce:transition-none",
+        "hover:border-border/80 hover:bg-card/90",
+        className,
+      )}
+    >
+      <CardHeader className="relative">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-transparent"
+        />
+        <div className="relative flex flex-wrap items-center gap-2">
+          <Badge variant="secondary">{project.category}</Badge>
+          {project.language ? <Badge variant="outline">{project.language}</Badge> : null}
+          {project.featured ? <Badge>Featured</Badge> : null}
+        </div>
+
+        <CardTitle className="relative mt-3 text-balance text-lg">
+          <Link
+            href={project.primaryUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={cn(
+              "inline-flex items-center gap-2 rounded-xs",
+              "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+              "hover:underline underline-offset-4 motion-reduce:transition-none",
+            )}
+          >
+            <span className="break-words">{project.title}</span>
+            <ExternalLink className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+          </Link>
+        </CardTitle>
+
+        <ExpandableText className="relative mt-2 text-sm text-foreground/80">
+          {project.description}
+        </ExpandableText>
+      </CardHeader>
+
+      <CardContent className="space-y-4">
+        {/* Highlights first */}
+        {project.highlights?.length ? (
+          <ul className="space-y-1 text-sm text-foreground/90">
+            {project.highlights.slice(0, 2).map((highlight) => (
+              <li key={highlight} className="flex gap-2">
+                <span
+                  aria-hidden="true"
+                  className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/70"
+                />
+                <span className="min-w-0">{highlight}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        {/* Tags middle */}
+        <div className="flex items-center gap-2 overflow-hidden">
+          <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+            {visibleTags.map((tag) => (
+              <TechBadge key={tag} name={tag} size="sm" />
+            ))}
+          </div>
+          <ProjectTagsOverflow hiddenTags={hiddenTags} />
+        </div>
+
+        {/* Metadata last (smaller) */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-1 tabular-nums">
+            <Star className="h-3.5 w-3.5" aria-hidden="true" />
+            {project.stars.toLocaleString("en-US")}
+          </span>
+          <span className="inline-flex items-center gap-1 tabular-nums">
+            <GitFork className="h-3.5 w-3.5" aria-hidden="true" />
+            {project.forks.toLocaleString("en-US")}
+          </span>
+          {typeof project.commitCount === "number" ? (
+            <span className="inline-flex items-center gap-1 tabular-nums">
+              <GitCommitHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+              {project.commitCount.toLocaleString("en-US")} commits
+            </span>
+          ) : null}
+          {typeof project.openPullRequests === "number" ? (
+            <span className="inline-flex items-center gap-1 tabular-nums">
+              <GitPullRequest className="h-3.5 w-3.5" aria-hidden="true" />
+              {project.openPullRequests.toLocaleString("en-US")} open PRs
+            </span>
+          ) : null}
+          {project.latestRelease ? (
+            <Link
+              href={project.latestRelease.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-h-11 items-center gap-1 rounded-xs px-1 tabular-nums hover:text-foreground hover:underline focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background md:min-h-6"
+              aria-label={`Open ${project.title} release ${project.latestRelease.tagName}`}
+            >
+              <Tag className="h-3.5 w-3.5" aria-hidden="true" />
+              {project.latestRelease.tagName}
+            </Link>
+          ) : null}
+          <span className="tabular-nums">Updated {project.updatedLabel}</span>
+        </div>
+      </CardContent>
+
+      <CardFooter className="mt-auto flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Link
+            href={project.repoUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Open ${project.title} repository on GitHub`}
+            className={buttonVariants({ variant: "outline", size: "icon", className: "h-11 w-11" })}
+          >
+            <FolderGit2 className="h-4 w-4" aria-hidden="true" />
+          </Link>
+          <Link
+            href={project.primaryUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Open ${project.title}`}
+            className={buttonVariants({ variant: "outline", className: "h-11 md:h-9" })}
+          >
+            <ExternalLink className="h-4 w-4" aria-hidden="true" />
+            <span>Open</span>
+          </Link>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {project.liveUrl ? (
+            <Link
+              href={project.liveUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Open ${project.title} live site`}
+              className={buttonVariants({ variant: "secondary", className: "h-11 md:h-9" })}
+            >
+              Live
+            </Link>
+          ) : null}
+          {project.docsUrl ? (
+            <Link
+              href={project.docsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Open ${project.title} documentation`}
+              className={buttonVariants({ variant: "outline", className: "h-11 md:h-9" })}
+            >
+              <BookOpenText className="h-4 w-4" aria-hidden="true" />
+              Docs
+            </Link>
+          ) : null}
+        </div>
+      </CardFooter>
+    </Card>
+  );
+}

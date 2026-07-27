@@ -1,0 +1,156 @@
+name: Dependency Update Check
+
+on:
+  schedule:
+    - cron: '0 9 1 * *' # Monthly on the 1st at 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-dependencies:
+    name: Check and Update Dependencies
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
+
+      - name: Setup Node.js and pnpm
+        uses: ./.github/actions/setup-node-pnpm
+        with:
+          install: "true"
+
+      - name: Install infrastructure dependencies
+        run: pnpm -C infrastructure install --frozen-lockfile
+
+      - name: Verify Node type dependency boundary
+        run: pnpm deps:check-node-types
+
+      - name: Check for updates
+        id: check-updates
+        run: |
+          set -euo pipefail
+
+          echo "Checking root and infrastructure dependencies..."
+          root_outdated_file="${RUNNER_TEMP:-/tmp}/pnpm-root-outdated.json"
+          infrastructure_outdated_file="${RUNNER_TEMP:-/tmp}/pnpm-infrastructure-outdated.json"
+
+          set +e
+          pnpm outdated --format json > "${root_outdated_file}"
+          root_outdated_status=$?
+          pnpm -C infrastructure outdated --format json > "${infrastructure_outdated_file}"
+          infrastructure_outdated_status=$?
+          set -e
+          if [[ "${root_outdated_status}" -gt 1 ]]; then
+            echo "root pnpm outdated failed with status ${root_outdated_status}" >&2
+            exit "${root_outdated_status}"
+          fi
+          if [[ "${infrastructure_outdated_status}" -gt 1 ]]; then
+            echo "infrastructure pnpm outdated failed with status ${infrastructure_outdated_status}" >&2
+            exit "${infrastructure_outdated_status}"
+          fi
+
+          ROOT_OUTDATED="$(cat "${root_outdated_file}")"
+          INFRASTRUCTURE_OUTDATED="$(cat "${infrastructure_outdated_file}")"
+          if [[ -z "${ROOT_OUTDATED}" ]]; then
+            ROOT_OUTDATED="[]"
+          fi
+          if [[ -z "${INFRASTRUCTURE_OUTDATED}" ]]; then
+            INFRASTRUCTURE_OUTDATED="[]"
+          fi
+          OUTDATED="$(
+            jq -n \
+              --argjson root "${ROOT_OUTDATED}" \
+              --argjson infrastructure "${INFRASTRUCTURE_OUTDATED}" \
+              '{root: $root, infrastructure: $infrastructure}'
+          )"
+
+          {
+            echo 'outdated<<__OUTDATED_JSON__'
+            echo "$OUTDATED"
+            echo '__OUTDATED_JSON__'
+          } >> "$GITHUB_OUTPUT"
+
+          root_update_count="$(
+            jq 'if type == "array" then length else [to_entries[] | select(.value.current != .value.wanted)] | length end' \
+              <<< "${ROOT_OUTDATED}"
+          )"
+          infrastructure_update_count="$(
+            jq 'if type == "array" then length else [to_entries[] | select(.value.current != .value.wanted)] | length end' \
+              <<< "${INFRASTRUCTURE_OUTDATED}"
+          )"
+          if (( root_update_count + infrastructure_update_count > 0 )); then
+            echo "has_updates=true" >> "$GITHUB_OUTPUT"
+            echo "Found outdated dependencies"
+          else
+            echo "has_updates=false" >> "$GITHUB_OUTPUT"
+            echo "All dependencies are up to date"
+          fi
+
+      - name: Update dependencies
+        if: steps.check-updates.outputs.has_updates == 'true'
+        env:
+          # Provide safe defaults so `pnpm build` doesn't fail on required env vars.
+          # This workflow is only a dependency sanity check, not a production deploy.
+          NEXT_PUBLIC_API_URL: https://api.bjornmelin.io
+          NEXT_PUBLIC_APP_URL: https://bjornmelin.io
+          NEXT_PUBLIC_BASE_URL: https://bjornmelin.io
+          CONTACT_EMAIL: test@example.com
+          SKIP_ENV_VALIDATION: "true"
+        run: |
+          # Update non-major root versions.
+          pnpm update
+
+          # Update non-major infrastructure versions without traversing unrelated directories.
+          pnpm -C infrastructure update
+
+          # Keep @types/node on the current repository Node major.
+          pnpm deps:check-node-types
+
+          # Verify both lockfiles remain reproducible.
+          pnpm install --frozen-lockfile
+          pnpm -C infrastructure install --frozen-lockfile
+
+          # Run validation to ensure nothing is broken or newly vulnerable.
+          pnpm audit --audit-level moderate
+          pnpm -C infrastructure audit --audit-level moderate
+          pnpm test
+          pnpm build
+          pnpm -C infrastructure build
+          pnpm -C infrastructure test
+
+      - name: Create Pull Request
+        if: steps.check-updates.outputs.has_updates == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: 'chore(deps): update dependencies'
+          title: 'chore(deps): automated dependency updates'
+          body: |
+            ## 🔄 Automated Dependency Updates
+            
+            This PR contains automated dependency updates for non-major versions.
+            
+            ### ✅ Checks Performed
+            - All tests pass
+            - Build succeeds
+            - No security vulnerabilities found
+            
+            ### 📋 Updated Dependencies
+            Please review the changes in root and infrastructure package manifests and lockfiles.
+            
+            ---
+            _This PR was automatically created by the dependency update workflow._
+          branch: deps/automated-updates
+          delete-branch: true
+          labels: |
+            dependencies
+            automated
+          assignees: BjornMelin
+          reviewers: BjornMelin

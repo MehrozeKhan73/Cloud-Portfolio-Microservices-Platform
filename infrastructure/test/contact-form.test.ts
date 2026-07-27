@@ -1,0 +1,424 @@
+import type { APIGatewayProxyEvent } from "aws-lambda";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// Mock the SSM module
+const getParameterMock = vi.fn();
+let getParameterSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+// Mock Resend with controlled send function
+const mockSend = vi.fn();
+vi.mock("resend", () => ({
+  Resend: class MockResend {
+    emails = {
+      send: mockSend,
+    };
+  },
+}));
+
+describe("contact-form Lambda handler", () => {
+  const validPayload = (overrides: Record<string, unknown> = {}) => ({
+    name: "Test User",
+    email: "user@example.com",
+    message: "This is a test message for the contact form.",
+    honeypot: "",
+    formLoadTime: Date.now() - 5000,
+    ...overrides,
+  });
+
+  const buildApiGatewayEvent = ({
+    body = JSON.stringify(validPayload()),
+    headers = { origin: "https://example.com" },
+    httpMethod = "POST",
+    sourceIp = "198.51.100.10",
+  }: {
+    body?: string | null;
+    headers?: APIGatewayProxyEvent["headers"];
+    httpMethod?: string;
+    sourceIp?: string;
+  } = {}): APIGatewayProxyEvent => ({
+    body,
+    headers,
+    httpMethod,
+    isBase64Encoded: false,
+    multiValueHeaders: {},
+    multiValueQueryStringParameters: null,
+    path: "/contact",
+    pathParameters: null,
+    queryStringParameters: null,
+    requestContext: {
+      accountId: "123456789012",
+      apiId: "contact-form-test",
+      authorizer: undefined,
+      httpMethod,
+      identity: {
+        accessKey: null,
+        accountId: null,
+        apiKey: null,
+        apiKeyId: null,
+        caller: null,
+        clientCert: null,
+        cognitoAuthenticationProvider: null,
+        cognitoAuthenticationType: null,
+        cognitoIdentityId: null,
+        cognitoIdentityPoolId: null,
+        principalOrgId: null,
+        sourceIp,
+        user: null,
+        userAgent: "vitest",
+        userArn: null,
+      },
+      path: "/contact",
+      protocol: "HTTP/1.1",
+      requestId: "contact-form-test-request",
+      requestTimeEpoch: Date.now(),
+      resourceId: "contact-form-resource",
+      resourcePath: "/contact",
+      stage: "test",
+    },
+    resource: "/contact",
+    stageVariables: null,
+  });
+
+  beforeEach(async () => {
+    // Reset modules to clear cached state
+    vi.resetModules();
+
+    // Set required env vars
+    process.env.DOMAIN_NAME = "example.com";
+    process.env.SSM_RECIPIENT_EMAIL_PARAM = "/portfolio/prod/CONTACT_EMAIL";
+    process.env.SSM_RESEND_API_KEY_PARAM = "/portfolio/prod/resend/api-key";
+    process.env.ALLOWED_ORIGINS = "https://example.com";
+
+    // Reset mocks
+    getParameterMock.mockReset();
+    mockSend.mockReset();
+
+    // Spy on the real module export so the handler's ESM import binding sees the mocked impl
+    getParameterSpy?.mockRestore();
+    const ssmModuleId = `/@fs${new URL("../lib/utils/ssm.ts", import.meta.url).pathname}`;
+    const ssm = (await import(ssmModuleId)) as typeof import("../lib/utils/ssm");
+    getParameterSpy = vi.spyOn(ssm, "getParameter").mockImplementation(getParameterMock);
+
+    getParameterMock.mockImplementation(async (param: string) => {
+      if (param.includes("CONTACT_EMAIL")) return "recipient@example.com";
+      if (param.includes("api-key")) return "re_test_123";
+      return "";
+    });
+
+    mockSend.mockResolvedValue({ error: null });
+  });
+
+  it("retrieves SSM parameters for recipient email and API key", async () => {
+    const mod = await import("../lib/functions/contact-form/index");
+
+    const event = buildApiGatewayEvent({
+      body: JSON.stringify(validPayload()),
+    });
+
+    const result = await mod.handler(event);
+    expect(result.statusCode).toBe(200);
+
+    // Verify SSM parameters were retrieved
+    expect(getParameterMock).toHaveBeenCalledWith("/portfolio/prod/CONTACT_EMAIL", true);
+    expect(getParameterMock).toHaveBeenCalledWith("/portfolio/prod/resend/api-key", true);
+  });
+
+  it("returns 403 for disallowed origins", async () => {
+    const mod = await import("../lib/functions/contact-form/index");
+
+    const event = buildApiGatewayEvent({
+      headers: { origin: "https://malicious-site.com" },
+      body: JSON.stringify(validPayload()),
+    });
+
+    const result = await mod.handler(event);
+    expect(result.statusCode).toBe(403);
+  });
+
+  it("handles OPTIONS preflight requests", async () => {
+    const mod = await import("../lib/functions/contact-form/index");
+
+    const event = buildApiGatewayEvent({
+      httpMethod: "OPTIONS",
+      headers: { origin: "https://example.com" },
+    });
+
+    const result = await mod.handler(event);
+    expect(result.statusCode).toBe(200);
+    expect(result.headers?.["Access-Control-Allow-Origin"]).toBe("https://example.com");
+  });
+
+  it("validates input and returns 400 for invalid data", async () => {
+    const mod = await import("../lib/functions/contact-form/index");
+
+    const event = buildApiGatewayEvent({
+      body: JSON.stringify({
+        name: "A", // Too short
+        email: "invalid-email",
+        message: "Short", // Too short
+        honeypot: "",
+        formLoadTime: Date.now() - 5000,
+      }),
+    });
+
+    const result = await mod.handler(event);
+    expect(result.statusCode).toBe(400);
+  });
+
+  it("returns 400 for missing request body", async () => {
+    const mod = await import("../lib/functions/contact-form/index");
+
+    const event = buildApiGatewayEvent({
+      body: null,
+    });
+
+    const result = await mod.handler(event);
+    expect(result.statusCode).toBe(400);
+    const body = JSON.parse(result.body);
+    expect(body.message).toContain("Missing request body");
+  });
+
+  it("returns 400 for invalid JSON body", async () => {
+    const mod = await import("../lib/functions/contact-form/index");
+
+    const event = buildApiGatewayEvent({
+      body: "not-valid-json",
+    });
+
+    const result = await mod.handler(event);
+    expect(result.statusCode).toBe(400);
+    const body = JSON.parse(result.body);
+    expect(body.error).toBe("Invalid request format");
+  });
+
+  it("sends email with correct structure", async () => {
+    const mod = await import("../lib/functions/contact-form/index");
+
+    const event = buildApiGatewayEvent({
+      body: JSON.stringify(
+        validPayload({
+          name: "John Doe",
+          email: "john@example.com",
+          message: "Hello, this is my message!",
+        }),
+      ),
+    });
+
+    await mod.handler(event);
+
+    expect(mockSend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "Contact Form <contact@example.com>",
+        to: "recipient@example.com",
+        replyTo: "john@example.com",
+        subject: "Contact Form: John Doe",
+      }),
+    );
+
+    // Verify HTML and text content are included
+    const callArgs = mockSend.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(callArgs?.html).toContain("John Doe");
+    expect(callArgs?.html).toContain("john@example.com");
+    expect(callArgs?.text).toContain("John Doe");
+    expect(callArgs?.text).toContain("john@example.com");
+  });
+
+  it("returns 500 on Resend API error", async () => {
+    mockSend.mockResolvedValue({
+      error: { message: "API key invalid", name: "validation_error" },
+    });
+
+    const mod = await import("../lib/functions/contact-form/index");
+
+    const event = buildApiGatewayEvent({
+      body: JSON.stringify(validPayload({ message: "Testing Resend error handling" })),
+    });
+
+    const result = await mod.handler(event);
+    expect(result.statusCode).toBe(500);
+
+    // Error messages are sanitized to not leak internal details
+    const body = JSON.parse(result.body);
+    expect(body.error).toBe("Failed to send message");
+    expect(body.message).toBe("An unexpected error occurred. Please try again later.");
+  });
+
+  it("returns 500 when SSM parameter is missing", async () => {
+    getParameterMock.mockImplementation(async (param: string) => {
+      if (param.includes("CONTACT_EMAIL")) return null;
+      if (param.includes("api-key")) return "re_test_123";
+      return "";
+    });
+
+    const mod = await import("../lib/functions/contact-form/index");
+
+    const event = buildApiGatewayEvent({
+      body: JSON.stringify(validPayload({ message: "Testing missing SSM parameter" })),
+    });
+
+    const result = await mod.handler(event);
+    expect(result.statusCode).toBe(500);
+
+    // Error messages are sanitized to not leak internal configuration details
+    const body = JSON.parse(result.body);
+    expect(body.error).toBe("Failed to send message");
+    expect(body.message).toBe("An unexpected error occurred. Please try again later.");
+  });
+
+  it("escapes HTML in email content to prevent XSS", async () => {
+    const mod = await import("../lib/functions/contact-form/index");
+
+    const event = buildApiGatewayEvent({
+      body: JSON.stringify(
+        validPayload({
+          name: "Evil<script>alert('xss')</script>User",
+          email: "evil@example.com",
+          message: "Message with <b>HTML</b> & special chars",
+        }),
+      ),
+    });
+
+    await mod.handler(event);
+
+    const callArgs = mockSend.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    const html = callArgs?.html as string;
+
+    // Verify HTML is escaped
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).toContain("&lt;b&gt;");
+    expect(html).toContain("&amp;");
+    expect(html).not.toContain("<script>");
+  });
+
+  it("returns success without sending email for honeypot submissions", async () => {
+    const mod = await import("../lib/functions/contact-form/index");
+
+    const event = buildApiGatewayEvent({
+      body: JSON.stringify(validPayload({ honeypot: "bot-filled" })),
+    });
+
+    const result = await mod.handler(event);
+    expect(result.statusCode).toBe(200);
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(getParameterMock).not.toHaveBeenCalled();
+  });
+
+  it("returns success without sending email for non-string honeypot submissions", async () => {
+    const mod = await import("../lib/functions/contact-form/index");
+
+    const event = buildApiGatewayEvent({
+      body: JSON.stringify(validPayload({ honeypot: 0 })),
+    });
+
+    const result = await mod.handler(event);
+    expect(result.statusCode).toBe(200);
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(getParameterMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects submissions that omit form load timing before sending email", async () => {
+    const mod = await import("../lib/functions/contact-form/index");
+
+    const { formLoadTime: _formLoadTime, ...payload } = validPayload();
+    const event = buildApiGatewayEvent({
+      body: JSON.stringify(payload),
+    });
+
+    const result = await mod.handler(event);
+    expect(result.statusCode).toBe(400);
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(getParameterMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects submissions that happen too quickly before sending email", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-22T08:00:00Z"));
+    try {
+      const mod = await import("../lib/functions/contact-form/index");
+
+      const event = buildApiGatewayEvent({
+        body: JSON.stringify(validPayload({ formLoadTime: Date.now() - 1000 })),
+      });
+
+      const result = await mod.handler(event);
+      expect(result.statusCode).toBe(400);
+      expect(mockSend).not.toHaveBeenCalled();
+      expect(getParameterMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rate limits repeated submissions by source IP before sending email", async () => {
+    const mod = await import("../lib/functions/contact-form/index");
+    const event = buildApiGatewayEvent({
+      sourceIp: "203.0.113.9",
+      body: JSON.stringify(validPayload()),
+    });
+
+    for (let i = 0; i < 5; i++) {
+      const result = await mod.handler(event);
+      expect(result.statusCode).toBe(200);
+    }
+
+    mockSend.mockClear();
+    getParameterMock.mockClear();
+
+    const rateLimited = await mod.handler(event);
+    expect(rateLimited.statusCode).toBe(429);
+    expect(rateLimited.headers?.["Retry-After"]).toBeDefined();
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(getParameterMock).not.toHaveBeenCalled();
+  });
+
+  it("rate limits repeated invalid submissions before early rejection", async () => {
+    const mod = await import("../lib/functions/contact-form/index");
+    const event = buildApiGatewayEvent({
+      sourceIp: "203.0.113.10",
+      body: JSON.stringify(validPayload({ role: "admin" })),
+    });
+
+    for (let i = 0; i < 5; i++) {
+      const result = await mod.handler(event);
+      expect(result.statusCode).toBe(400);
+    }
+
+    const rateLimited = await mod.handler(event);
+    expect(rateLimited.statusCode).toBe(429);
+    expect(rateLimited.headers?.["Retry-After"]).toBeDefined();
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(getParameterMock).not.toHaveBeenCalled();
+  });
+
+  it("rate limits repeated missing-body submissions before early rejection", async () => {
+    const mod = await import("../lib/functions/contact-form/index");
+    const event = buildApiGatewayEvent({
+      sourceIp: "203.0.113.11",
+      body: null,
+    });
+
+    for (let i = 0; i < 5; i++) {
+      const result = await mod.handler(event);
+      expect(result.statusCode).toBe(400);
+    }
+
+    const rateLimited = await mod.handler(event);
+    expect(rateLimited.statusCode).toBe(429);
+    expect(rateLimited.headers?.["Retry-After"]).toBeDefined();
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(getParameterMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unexpected payload fields before sending email", async () => {
+    const mod = await import("../lib/functions/contact-form/index");
+
+    const event = buildApiGatewayEvent({
+      body: JSON.stringify(validPayload({ role: "admin" })),
+    });
+
+    const result = await mod.handler(event);
+    expect(result.statusCode).toBe(400);
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(getParameterMock).not.toHaveBeenCalled();
+  });
+});

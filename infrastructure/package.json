@@ -1,0 +1,48 @@
+{
+  "name": "infrastructure",
+  "version": "1.0.0",
+  "packageManager": "pnpm@10.28.0",
+  "bin": "bin/app.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "cdk": "cdk",
+    "deploy:dns": "cdk deploy prod-portfolio-dns",
+    "deploy:storage": "cdk deploy prod-portfolio-storage",
+    "deploy:deployment": "cdk deploy prod-portfolio-deployment",
+    "deploy:monitoring": "cdk deploy prod-portfolio-monitoring",
+    "deploy:email": "cdk deploy prod-portfolio-email",
+    "deploy:all": "cdk deploy --all",
+    "destroy:all": "cdk destroy --all",
+    "diff": "cdk diff"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "8.10.162",
+    "@types/node": "^24.0.0",
+    "aws-cdk": "2.1129.0",
+    "esbuild": "^0.28.1",
+    "tsx": "^4.23.0",
+    "typescript": "~6.0.3",
+    "vite": "8.1.3",
+    "vitest": "~4.1.10"
+  },
+  "pnpm": {
+    "overrides": {
+      "picomatch": "4.0.4"
+    },
+    "onlyBuiltDependencies": [
+      "unrs-resolver",
+      "esbuild"
+    ]
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudfront": "3.1080.0",
+    "@aws-sdk/client-ssm": "3.1080.0",
+    "aws-cdk-lib": "2.261.0",
+    "constructs": "^10.6.0",
+    "resend": "^6.17.1",
+    "source-map-support": "^0.5.21"
+  }
+}
